@@ -140,6 +140,8 @@ TEST_GROUP_RUNNER(btc_txn_helper_test) {
   RUN_TEST_CASE(btc_txn_helper_test, btc_txn_helper_verify_input_p2pkh_fail);
   RUN_TEST_CASE(btc_txn_helper_test, btc_txn_helper_verify_input_p2wpkh);
   RUN_TEST_CASE(btc_txn_helper_test, btc_txn_helper_verify_input_p2wpkh_fail);
+  RUN_TEST_CASE(btc_txn_helper_test, btc_txn_helper_verify_input_p2wpkh_in_p2sh);
+  RUN_TEST_CASE(btc_txn_helper_test, btc_txn_helper_verify_input_p2wpkh_in_p2sh_fail);
 
   RUN_TEST_CASE(btc_txn_helper_test, btc_txn_helper_transaction_weight_legacy1);
   RUN_TEST_CASE(btc_txn_helper_test, btc_txn_helper_transaction_weight_legacy2);
