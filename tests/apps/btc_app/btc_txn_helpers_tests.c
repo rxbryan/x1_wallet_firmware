@@ -812,6 +812,93 @@ TEST(btc_txn_helper_test, btc_txn_helper_p2wpkh_digest_1_2) {
 TEST(btc_txn_helper_test, btc_txn_helper_p2wpkh_digest_2_2) {
 }
 
+
+TEST(btc_txn_helper_test, btc_txn_helper_p2wpkh_in_p2sh_digest_1_2) {
+  uint8_t calculated_digest[32] = {0};
+  uint8_t expected_digest[32] = {0};
+  btc_segwit_cache_t expected_cache = {.filled = true};
+  btc_txn_input_t input = {
+      .prev_txn_hash = {0},
+      .value = 1000000000,
+      .prev_output_index = 0x00000001,
+      .script_pub_key = {.size = 26},
+      .change_index = 0,
+      .address_index = 1,
+      .sequence = 0xFFFFFFFe,
+  };
+  btc_sign_txn_output_t outputs[] = {
+      {
+          .value = 0x000000000bebb4b8,
+          .script_pub_key = {.size = 26},
+          .is_change = false,
+          .has_changes_index = false,
+      },
+      {
+          .value = 0x000000002faf0800,
+          .script_pub_key = {.size = 26},
+          .is_change = false,
+          .has_changes_index = false,
+      },
+  };
+  btc_txn_context_t context = {
+      .init_info = {.derivation_path_count = 3,
+                    .derivation_path = {0x80000000 + 49,
+                                        0x80000000,
+                                        0x80000000}},
+      .metadata = {.version = 0x00000001,
+                   .input_count = 0x01,
+                   .output_count = 0x02,
+                   .sighash = 0x00000001,
+                   .locktime = 0x00000492},
+      .segwit_cache = {0},
+      .change_output_idx = 1,
+  };
+
+  context.inputs = &input;
+  context.outputs = outputs;
+
+  hex_string_to_byte_array(
+      "db6b1b20aa0fd7b23880be2ecbd4a98130974cf4748fb66092ac4d3ceb1a5477",
+      64,
+      input.prev_txn_hash);
+  hex_string_to_byte_array("a91479091972186c449eb1ded22b78e40d009bdf008987",
+                           52,
+                           input.script_pub_key.bytes);
+  hex_string_to_byte_array("1976a914a457b684d7f0d539a46a45bbc043f35b59d0d96388ac",
+                           52,
+                           outputs[0].script_pub_key.bytes);
+  hex_string_to_byte_array("1976a914fd270b1ee6abcaea97fea7ad0402e8bd8ad6d77c88ac",
+                           52,
+                           outputs[1].script_pub_key.bytes);
+  hex_string_to_byte_array(
+      "b0287b4a252ac05af83d2dcef00ba313af78a3e9c329afa216eb3aa2a7b4613a",
+      64,
+      expected_cache.hash_prevouts);
+  hex_string_to_byte_array(
+      "18606b350cd8bf565266bc352f0caddcf01e8fa789dd8a15386327cf8cabe198",
+      64,
+      expected_cache.hash_sequence);
+  hex_string_to_byte_array(
+      "de984f44532e2173ca0d64314fcefe6d30da6f8cf27bafa706da61df8a226c83",
+      64,
+      expected_cache.hash_outputs);
+  hex_string_to_byte_array(
+      "64f3b0f4dd2bb3aa1ce8566d220cc74dda9df97d8490cc81d89d735c92e59fb6",
+      64,
+      expected_digest);
+  btc_segwit_init_cache(&context);
+  btc_segwit_init_cache(&context);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(
+      expected_cache.hash_prevouts, context.segwit_cache.hash_prevouts, 32);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(
+      expected_cache.hash_sequence, context.segwit_cache.hash_sequence, 32);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(
+      expected_cache.hash_outputs, context.segwit_cache.hash_outputs, 32);
+  btc_digest_input(&context, 0, calculated_digest);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(expected_digest, calculated_digest, 32);
+
+}
+
 TEST(btc_txn_helper_test, btc_txn_helper_get_fee) {
   /* Test data source:
    * https://blockchain.info/rawtx/b77a9ff6738877d4eb2d300b1c0ec7ca4d14353e8d501d55139019609ca2e4e5?format=json
