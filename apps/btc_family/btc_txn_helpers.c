@@ -144,23 +144,6 @@ STATIC bool calculate_p2wpkh_digest(const btc_txn_context_t *context,
                                     uint8_t input_index,
                                     uint8_t *digest);
 
-/**
- * @brief Calculates digest according to the serialization format defined in
- * BIP-0143.
- * https://github.com/bitcoin/bips/blob/master/bip-0143.mediawiki#p2sh-p2wpkh
- *
- * @param context Reference to the bitcoin transaction context
- * @param index The index of the input to digest
- * @param digest Reference to a buffer to hold the calculated digest
- *
- * @return bool Indicating if the specified input was digested or not
- * @retval true If the digest was calculated successfully
- * @retval false If the digest was not calculated due to missing segwit cache
- */
-bool calculate_p2wpkh_in_p2sh_digest(const btc_txn_context_t *context,
-                                    const uint8_t input_index,
-                                    uint8_t *digest);
-
 /*****************************************************************************
  * STATIC VARIABLES
  *****************************************************************************/
@@ -345,78 +328,6 @@ STATIC bool calculate_p2wpkh_digest(const btc_txn_context_t *context,
   return true;
 }
 
-
-bool calculate_p2wpkh_in_p2sh_digest(const btc_txn_context_t *context,
-                                    const uint8_t input_index,
-                                    uint8_t *digest) {
-  if (!context->segwit_cache.filled) {
-    // cache is not filled, no benefit to proceed as we depend on it
-    return false;
-  }
-  uint8_t buffer[206] = {0};
-  uint32_t len = 0;
-  SHA256_CTX sha_256_ctx = {0};
-  memzero(&sha_256_ctx, sizeof(sha_256_ctx));
-  sha256_Init(&sha_256_ctx);
-
-  // digest version
-  write_le(buffer, context->metadata.version);
-  len +=4;
-  sha256_Update(&sha_256_ctx, buffer, 4);
-
-  sha256_Update(&sha_256_ctx, context->segwit_cache.hash_prevouts, 32);
-  len +=32;
-  sha256_Update(&sha_256_ctx, context->segwit_cache.hash_sequence, 32);
-  len +=32;
-
-  //outpoint
-  memcpy(buffer, context->inputs[input_index].prev_txn_hash, 32);
-  write_le(buffer+32, context->inputs[input_index].prev_output_index);
-
-  sha256_Update(&sha_256_ctx, buffer, 36);
-  len +=36;
-
-  /* Scriptcode */
-  // Leading size bytes
-  buffer[0] = 0x19;
-  buffer[1] = 0x76;
-  sha256_Update(&sha_256_ctx, buffer, 2);
-  len +=2;
-  sha256_Update(
-    &sha_256_ctx,
-    context->inputs[input_index].script_pub_key.bytes,
-    context->inputs[input_index].script_pub_key.size-1
-    );
-  len +=22;
-  buffer[0] = 0x88;
-  buffer[1] = 0xac;
-  sha256_Update(&sha_256_ctx, buffer, 2);
-  len +=2;
-
-  // digest the 64-bit value (little-endian)
-  sha256_Update(&sha_256_ctx, (uint8_t *)&context->inputs[input_index].value, 8);
-  len +=8;
-
-  // digest sequence
-  write_le(buffer, context->inputs[input_index].sequence);
-  len +=4;
-  sha256_Update(&sha_256_ctx, buffer, 4);
-  sha256_Update(&sha_256_ctx, context->segwit_cache.hash_outputs, 32);
-  len +=32;
-
-  // digest locktime and sighash
-  write_le(buffer, context->metadata.locktime);
-  write_le(buffer + 4, context->metadata.sighash);
-  len +=8;
-  sha256_Update(&sha_256_ctx, buffer, 8);
-
-  // double hash
-  sha256_Final(&sha_256_ctx, digest);
-  sha256_Raw(digest, 32, digest);
-  memzero(&sha_256_ctx, sizeof(sha_256_ctx));
-  return true;
-}
-
 static void update_hash(btc_verify_input_t *verify_input_data,
                         const uint8_t *raw_txn_chunk,
                         int chunk_index,
@@ -479,6 +390,23 @@ static void update_locktime(btc_verify_input_t *verify_input_data,
     return;
   }
 }
+
+// TODO: Add chunking condition for varint decode
+// refer: https://app.clickup.com/t/9002019994/PRF-7288
+static int64_t varint_decode(const uint8_t *raw_txn_chunk, int32_t *offset) {
+  uint8_t first_byte = raw_txn_chunk[*offset];
+  if (first_byte < 0xFD) {
+    return first_byte;
+  } else {
+    // TODO: var-int varies between 1-9 bytes
+    // current implementation supports decoding
+    // upto 3 bytes only
+    uint8_t result[2];
+    memcpy(result, raw_txn_chunk + *offset + 1, 2);
+    *offset += 2;
+    return U16_READ_LE_ARRAY(result);
+  }
+}
 /*****************************************************************************
  * GLOBAL FUNCTIONS
  *****************************************************************************/
@@ -503,7 +431,7 @@ int btc_verify_input(const uint8_t *raw_txn_chunk,
     // store the number of inputs in the raw_txn
     verify_input_data->count = raw_txn_chunk[offset++];
     // TODO: Improve varint decode.
-    // size of variable containing ip-count/op-count
+    // size of variable containing script size and ip-count/op-count
     // varies (1-9 Bytes) depending on its value.
     // refer:
     // https://en.bitcoin.it/wiki/Protocol_documentation#Variable_length_integer
@@ -531,9 +459,10 @@ int btc_verify_input(const uint8_t *raw_txn_chunk,
           }
 
           case SCRIPT_LENGTH_CASE: {
-            if (offset + raw_txn_chunk[offset] + 1 + 4 > CHUNK_SIZE) {
+            int64_t script_length = varint_decode(raw_txn_chunk, &offset);
+            if (offset + script_length + 1 + 4 > CHUNK_SIZE) {
               verify_input_data->prev_offset =
-                  (offset + raw_txn_chunk[offset] + 1 + 4) - CHUNK_SIZE;
+                  (offset + script_length + 1 + 4) - CHUNK_SIZE;
               update_hash(
                   verify_input_data, raw_txn_chunk, chunk_index, CHUNK_SIZE);
               verify_input_data->input_parse =
@@ -541,7 +470,7 @@ int btc_verify_input(const uint8_t *raw_txn_chunk,
               verify_input_data->input_index++;
               return 4;
             } else {
-              offset += (raw_txn_chunk[offset] + 1 + 4);
+              offset += (script_length + 1 + 4);
             }
             break;
           }
@@ -741,15 +670,12 @@ bool btc_digest_input(const btc_txn_context_t *context,
   btc_sign_txn_input_script_pub_key_t *script =
       &context->inputs[index].script_pub_key;
   btc_script_type_e type = btc_get_script_type(script->bytes, script->size);
-
   if (SCRIPT_TYPE_P2WPKH == type) {
     // segwit digest calculation; could fail if segwit_cache not filled
     status = calculate_p2wpkh_digest(context, index, digest);
   } else if (SCRIPT_TYPE_P2PKH == type) {
     // p2pkh digest calculation; has not failure case
     calculate_p2pkh_digest(context, index, digest);
-  }else if (SCRIPT_TYPE_P2SH == type) {
-    status = calculate_p2wpkh_in_p2sh_digest(context, index, digest);
   } else {
     status = false;
   }
